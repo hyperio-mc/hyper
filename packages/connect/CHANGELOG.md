@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.13.0](https://github.com/hyper63/hyper/compare/hyper-connect@v0.12.0...hyper-connect@v0.13.0) (2025-09-29)
+
+
+### Bug Fixes
+
+* **connect:** add strictResource flag to ensure resource is not nullish when required ([54d4305](https://github.com/hyper63/hyper/commit/54d4305d26b3e15ec762974439e6b165f5e6d2bb))
+* **connect:** require destroy confirmation to be strictly true ([3cde0cd](https://github.com/hyper63/hyper/commit/3cde0cd125a680ba1f756f1288fad12cb7ee65f1))
+
 ## [0.12.0](https://github.com/hyper63/hyper/compare/hyper-connect@v0.11.0...hyper-connect@v0.12.0) (2024-01-26)
 
 
