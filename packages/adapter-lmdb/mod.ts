@@ -6,21 +6,35 @@ import PORT_NAME from './port_name.ts'
 /**
  * LMDB adapter for hyper Data Port
  * 
- * This adapter provides a high-performance, ACID-compliant data storage
- * solution using LMDB (Lightning Memory-Mapped Database).
+ * This factory function creates a hyper adapter plugin that can be registered
+ * with the hyper core. It follows the standard hyper adapter pattern with
+ * `load` and `link` lifecycle methods.
  * 
- * Features:
- * - Ultra-fast key-value storage
- * - ACID transactions
- * - Efficient memory usage with memory-mapped files
- * - Optional compression
- * - Full Data Port interface implementation
+ * ## Adapter Lifecycle
+ * 
+ * 1. **load()**: Called once during hyper startup
+ *    - Creates the data directory if it doesn't exist
+ *    - Opens the LMDB environment (creates `hyper-data.mdb` file)
+ *    - Opens the metadata database for storing database aliases
+ *    - Returns an environment object for the link phase
+ * 
+ * 2. **link(env)**: Called after load to get the adapter implementation
+ *    - Receives the environment from load()
+ *    - Returns a factory function that creates the adapter instance
+ *    - The adapter instance implements the DataPort interface
+ * 
+ * ## Environment Cleanup
+ * 
+ * The adapter registers an 'unload' event handler to properly close the LMDB
+ * environment when the process exits. This ensures data integrity and releases
+ * file locks.
  * 
  * @param config - Configuration options for the adapter
- * @returns A hyper adapter plugin
+ * @returns A hyper adapter plugin object with id, port, load, and link properties
  * 
  * @example
  * ```ts
+ * // In hyper.config.js
  * import lmdb from 'hyper-adapter-lmdb'
  * 
  * export default {
@@ -28,11 +42,14 @@ import PORT_NAME from './port_name.ts'
  *   adapters: [
  *     {
  *       port: 'data',
- *       plugins: [lmdb({ dir: './data' })],
+ *       plugins: [lmdb({ dir: './data', maxDbs: 50 })],
  *     },
  *   ],
  * }
  * ```
+ * 
+ * @see {@link AdapterConfig} for configuration options
+ * @see {@link DataPort} for the interface this adapter implements
  */
 export default (config: AdapterConfig = {}) => ({
   id: 'lmdb',

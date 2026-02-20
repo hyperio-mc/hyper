@@ -164,6 +164,40 @@ const projectFields = (
 
 /**
  * Create the LMDB data adapter
+ * 
+ * This factory function creates an adapter that implements the Data Port interface
+ * using LMDB as the underlying storage engine. Each method returns a Promise that
+ * resolves to a standardized result format: `{ ok: true, ... }` for success or
+ * `{ ok: false, msg: string, status: number }` for errors.
+ * 
+ * ## Architecture
+ * 
+ * The adapter uses three LMDB databases:
+ * - **rootDb**: The root environment that houses all databases
+ * - **meta**: A database for storing database metadata (aliases → actual names)
+ * - **dbs**: A Map cache of opened database instances
+ * 
+ * ## Why LMDB?
+ * 
+ * LMDB was chosen as a replacement for MongoDB because it provides:
+ * - **Zero configuration**: No separate server process needed
+ * - **ACID compliance**: Full transactional support with crash recovery
+ * - **Memory efficiency**: Memory-mapped files leverage OS caching automatically
+ * - **Ordered keys**: Documents are stored in key order for efficient range queries
+ * - **Cross-platform**: Works consistently across Linux, macOS, and Windows
+ * 
+ * ## Error Handling Strategy
+ * 
+ * All methods use the crocks Async pattern for consistent error handling:
+ * 1. Wrap operations in Async.fromPromise
+ * 2. Catch LMDB errors and convert to HyperErr
+ * 3. Channel HyperErr through success path for uniform response formatting
+ * 
+ * @param env - The environment object containing database connections
+ * @param env.rootDb - The root LMDB database environment
+ * @param env.meta - The metadata database for storing db aliases
+ * @param env.dbs - A Map cache for opened database instances
+ * @returns A frozen object implementing the Data Port interface
  */
 export function adapter(env: {
   rootDb: Database<unknown>
@@ -210,6 +244,20 @@ export function adapter(env: {
 
   /**
    * Create a new database
+   * 
+   * Creates a new named database within the LMDB environment. The name you provide
+   * is an alias; internally, LMDB databases are named with a unique ID (e.g., `db_abc123`).
+   * This indirection allows for future features like database renaming without data migration.
+   * 
+   * @param name - The alias for the new database
+   * @returns `{ ok: true }` on success, or `{ ok: false, msg, status }` on error
+   * @throws HyperErr with status 409 if database already exists
+   * 
+   * @example
+   * ```ts
+   * const result = await adapter.createDatabase('my-app-db')
+   * // { ok: true }
+   * ```
    */
   async function createDatabase(name: string): Promise<LmdbResult> {
     return Async.of(name)
@@ -251,6 +299,24 @@ export function adapter(env: {
 
   /**
    * Remove a database
+   * 
+   * Permanently deletes a database and all its documents. This operation:
+   * 1. Resolves the alias to find the actual database
+   * 2. Drops the LMDB database (frees disk space)
+   * 3. Removes the metadata entry
+   * 4. Clears the database from the cache
+   * 
+   * **Warning**: This operation is irreversible. All documents are permanently deleted.
+   * 
+   * @param name - The alias of the database to remove
+   * @returns `{ ok: true }` on success, or `{ ok: false, msg, status }` on error
+   * @throws HyperErr with status 404 if database not found
+   * 
+   * @example
+   * ```ts
+   * const result = await adapter.removeDatabase('my-app-db')
+   * // { ok: true }
+   * ```
    */
   async function removeDatabase(name: string): Promise<LmdbResult> {
     return Async.of(name)
@@ -288,6 +354,31 @@ export function adapter(env: {
 
   /**
    * Create a document
+   * 
+   * Creates a new document with the specified ID in the database. This operation
+   * is atomic and will fail if a document with the same ID already exists.
+   * 
+   * **Why not upsert on create?**
+   * The create operation is deliberately strict to prevent accidental overwrites.
+   * Use `updateDocument` for upsert behavior (create or replace).
+   * 
+   * @param dbName - The database alias
+   * @param id - The unique document identifier
+   * @param doc - The document data to store
+   * @returns `{ ok: true, id }` on success, or `{ ok: false, msg, status }` on error
+   * @throws HyperErr with status 404 if database not found
+   * @throws HyperErr with status 409 if document already exists
+   * @throws HyperErr with status 400 if document is empty
+   * 
+   * @example
+   * ```ts
+   * const result = await adapter.createDocument({
+   *   db: 'users',
+   *   id: 'user-123',
+   *   doc: { name: 'Alice', email: 'alice@example.com' }
+   * })
+   * // { ok: true, id: 'user-123' }
+   * ```
    */
   async function createDocument({
     db: dbName,
@@ -330,6 +421,23 @@ export function adapter(env: {
 
   /**
    * Retrieve a document
+   * 
+   * Fetches a single document by its ID. This is an O(1) key lookup operation
+   * in LMDB, making it extremely efficient.
+   * 
+   * @param dbName - The database alias
+   * @param id - The document ID to retrieve
+   * @returns The document object on success, or `{ ok: false, msg, status }` on error
+   * @throws HyperErr with status 404 if database or document not found
+   * 
+   * @example
+   * ```ts
+   * const result = await adapter.retrieveDocument({
+   *   db: 'users',
+   *   id: 'user-123'
+   * })
+   * // { name: 'Alice', email: 'alice@example.com' }
+   * ```
    */
   async function retrieveDocument({
     db: dbName,
@@ -362,6 +470,29 @@ export function adapter(env: {
 
   /**
    * Update a document (upsert behavior)
+   * 
+   * Updates an existing document or creates it if it doesn't exist. This is a
+   * complete replacement operation - the entire document is replaced, not merged.
+   * 
+   * **Note**: This is NOT a partial update. If you want to merge fields,
+   * you must retrieve, merge, and update.
+   * 
+   * @param dbName - The database alias
+   * @param id - The document ID to update
+   * @param doc - The new document data (replaces existing entirely)
+   * @returns `{ ok: true, id }` on success, or `{ ok: false, msg, status }` on error
+   * @throws HyperErr with status 404 if database not found
+   * 
+   * @example
+   * ```ts
+   * // Complete replacement
+   * const result = await adapter.updateDocument({
+   *   db: 'users',
+   *   id: 'user-123',
+   *   doc: { name: 'Alice Updated', email: 'alice.new@example.com', role: 'admin' }
+   * })
+   * // { ok: true, id: 'user-123' }
+   * ```
    */
   async function updateDocument({
     db: dbName,
@@ -394,6 +525,23 @@ export function adapter(env: {
 
   /**
    * Remove a document
+   * 
+   * Deletes a single document by its ID. The operation verifies the document
+   * exists before deletion.
+   * 
+   * @param dbName - The database alias
+   * @param id - The document ID to remove
+   * @returns `{ ok: true, id }` on success, or `{ ok: false, msg, status }` on error
+   * @throws HyperErr with status 404 if database or document not found
+   * 
+   * @example
+   * ```ts
+   * const result = await adapter.removeDocument({
+   *   db: 'users',
+   *   id: 'user-123'
+   * })
+   * // { ok: true, id: 'user-123' }
+   * ```
    */
   async function removeDocument({
     db: dbName,
@@ -428,6 +576,41 @@ export function adapter(env: {
 
   /**
    * List documents with optional filtering
+   * 
+   * Retrieves documents from a database with optional key range filtering
+   * and pagination. Leverages LMDB's ordered keys for efficient range queries.
+   * 
+   * **Key Ordering**: Documents are stored in lexicographic key order, making
+   * range queries (startkey/endkey) very efficient.
+   * 
+   * **Note**: This method iterates through keys. For complex queries with
+   * selectors, use `queryDocuments` instead.
+   * 
+   * @param dbName - The database alias
+   * @param limit - Maximum number of documents to return
+   * @param startkey - Start of key range (inclusive)
+   * @param endkey - End of key range (inclusive via \uffff suffix)
+   * @param keys - Comma-separated list of specific keys to retrieve
+   * @param descending - If true, iterate in reverse key order
+   * @returns `{ ok: true, docs: [...] }` on success, or error object
+   * @throws HyperErr with status 404 if database not found
+   * 
+   * @example
+   * ```ts
+   * // Get first 10 documents
+   * const result = await adapter.listDocuments({
+   *   db: 'users',
+   *   limit: 10
+   * })
+   * 
+   * // Range query
+   * const result = await adapter.listDocuments({
+   *   db: 'users',
+   *   startkey: 'user-100',
+   *   endkey: 'user-200',
+   *   descending: true
+   * })
+   * ```
    */
   async function listDocuments({
     db: dbName,
@@ -488,6 +671,45 @@ export function adapter(env: {
 
   /**
    * Query documents with selector
+   * 
+   * Performs a query against all documents in the database using MongoDB-style
+   * selectors. This is an in-memory filter that iterates through all documents.
+   * 
+   * **Performance Note**: Since LMDB doesn't support secondary indexes natively,
+   * this implementation scans all documents. For large datasets, consider:
+   * - Using `listDocuments` with key ranges for primary key queries
+   * - Creating a separate "index" database for frequently queried fields
+   * - Using the `use_index` parameter (stored as metadata for future optimization)
+   * 
+   * @param dbName - The database alias
+   * @param query.selector - MongoDB-style selector object
+   * @param query.fields - Fields to project (return subset of fields)
+   * @param query.sort - Sort specification: string fields or { field: 'ASC'|'DESC' }
+   * @param query.limit - Maximum documents to return
+   * @param query.skip - Number of documents to skip (for pagination)
+   * @param query.use_index - Index name hint (currently stored as metadata only)
+   * @returns `{ ok: true, docs: [...] }` on success, or error object
+   * @throws HyperErr with status 404 if database not found
+   * 
+   * @example
+   * ```ts
+   * // Simple equality query
+   * const result = await adapter.queryDocuments({
+   *   db: 'users',
+   *   query: { selector: { status: 'active' } }
+   * })
+   * 
+   * // Complex query with operators
+   * const result = await adapter.queryDocuments({
+   *   db: 'users',
+   *   query: {
+   *     selector: { age: { $gte: 18 }, status: { $in: ['active', 'pending'] } },
+   *     sort: [{ age: 'DESC' }],
+   *     limit: 10,
+   *     fields: ['name', 'email']
+   *   }
+   * })
+   * ```
    */
   async function queryDocuments({
     db: dbName,
@@ -553,8 +775,26 @@ export function adapter(env: {
 
   /**
    * Create an index
-   * Note: LMDB uses ordered keys, so primary key index is automatic.
-   * This is a no-op for secondary indexes (would need separate index databases).
+   * 
+   * Stores index metadata for the specified fields. Since LMDB uses ordered keys
+   * by default, primary key lookups are already optimized. This method exists
+   * primarily for API compatibility with other Data Port adapters.
+   * 
+   * **Current Behavior**: Index metadata is stored but not used for query optimization.
+   * Future implementations could create separate index databases for secondary indexes.
+   * 
+   * **Why not full indexing?** LMDB's design philosophy favors simple key-value access.
+   * Implementing secondary indexes would require:
+   * - Creating separate LMDB databases for each index
+   * - Maintaining index consistency on document changes
+   * - Added complexity for a feature that many use-cases don't need
+   * 
+   * @param dbName - The database alias
+   * @param name - A name for the index
+   * @param fields - Fields to index (array of field names or sort specs)
+   * @param partialFilter - Optional partial filter selector
+   * @returns `{ ok: true }` on success, or error object
+   * @throws HyperErr with status 404 if database not found
    */
   async function indexDocuments({
     db: dbName,
@@ -596,6 +836,33 @@ export function adapter(env: {
 
   /**
    * Bulk document operations
+   * 
+   * Performs bulk insert/update operations in a single LMDB transaction.
+   * All operations are atomic - either all succeed or none do (transaction rolls back).
+   * 
+   * **Transaction Behavior**: Uses LMDB's native transaction support for ACID guarantees.
+   * If any document operation fails, the entire transaction is rolled back.
+   * 
+   * **Partial Success Reporting**: Even within a transaction, each document's
+   * result is tracked individually in the results array.
+   * 
+   * @param dbName - The database alias
+   * @param docs - Array of documents (each must have an `_id` field)
+   * @returns `{ ok: true, results: [{ ok: true, id }, ...] }` on success
+   * @throws HyperErr with status 404 if database not found
+   * 
+   * @example
+   * ```ts
+   * const result = await adapter.bulkDocuments({
+   *   db: 'users',
+   *   docs: [
+   *     { _id: 'user-1', name: 'Alice' },
+   *     { _id: 'user-2', name: 'Bob' },
+   *     { _id: 'user-3', name: 'Charlie' }
+   *   ]
+   * })
+   * // { ok: true, results: [{ ok: true, id: 'user-1' }, ...] }
+   * ```
    */
   async function bulkDocuments({
     db: dbName,
