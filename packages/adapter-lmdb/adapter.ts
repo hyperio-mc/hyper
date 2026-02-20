@@ -462,7 +462,8 @@ export function adapter(env: {
         } = {}
         
         if (startkey) rangeOptions.start = startkey
-        if (endkey) rangeOptions.end = endkey
+        // LMDB's end is exclusive, so append \uffff to make it inclusive
+        if (endkey) rangeOptions.end = endkey + '\uffff'
         if (descending) rangeOptions.reverse = true
         
         for (const { key, value } of db.getRange(rangeOptions)) {
