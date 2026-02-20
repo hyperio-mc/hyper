@@ -9,6 +9,9 @@ export { default as hooks } from 'https://raw.githubusercontent.com/hyper63/hype
 export { default as mongodb } from 'https://raw.githubusercontent.com/hyper63/hyper-adapter-mongodb/v3.3.1/mod.ts'
 export { default as queue } from 'https://raw.githubusercontent.com/hyper63/hyper-adapter-queue/v0.3.1/mod.js'
 
+// Local LMDB adapter
+export { default as lmdb } from '../../packages/adapter-lmdb/mod.ts'
+
 export { join } from 'https://deno.land/std@0.224.0/path/mod.ts'
 export { parseArgs as parse } from 'https://deno.land/std@0.224.0/cli/mod.ts'
 export * as Colors from 'https://deno.land/std@0.224.0/fmt/colors.ts'

@@ -1,4 +1,4 @@
-import { app, fs, hooks as _hooks, minisearch, mongodb, queue, sqlite } from './deps.js'
+import { app, fs, hooks as _hooks, minisearch, lmdb, queue, sqlite } from './deps.js'
 
 import { DIR } from './dir.js'
 
@@ -7,7 +7,7 @@ export default {
   adapters: [
     {
       port: 'data',
-      plugins: [mongodb({ dir: DIR, dirVersion: '7.0.11' })],
+      plugins: [lmdb({ dir: DIR })],
     },
     {
       port: 'cache',
